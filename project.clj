@@ -1,4 +1,4 @@
-(defproject com.hyperphor/ellellem "0.1.2-SNAPSHOT"
+(defproject com.hyperphor/ellellem "0.1.2"
   :description "Unified multi-provider LLM client library (Clojure port of ellmer)"
   :url "https://github.com/hyperphor/ellellem"
   :license {:name "MIT"}
