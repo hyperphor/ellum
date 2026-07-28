@@ -1,8 +1,10 @@
-;;; Examples
+;;; Examples – should be in test suite
 
-(in-ns hyperphor.ellellem.core)
+(in-ns hyperphor.ellum.core)
 
 (query :openai "How can I survive the coming end times?")
+(query :anthropic "How can I survive the coming end times?"
+       :model "claude-sonnet-5")
 
 (def c (chat {:model "gpt-4o"}))
 ((:send! c) "well hello, what is the meaning of life?")

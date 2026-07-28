@@ -1,11 +1,11 @@
-(ns hyperphor.ellellem.core-test
+(ns hyperphor.ellum.core-test
   (:require [clojure.test :refer [deftest is testing]]
-            [hyperphor.ellellem.core :as llm]
-            [hyperphor.ellellem.tools :as tools]
-            [hyperphor.ellellem.schema :as schema]
-            [hyperphor.ellellem.util :as util]
-            [hyperphor.ellellem.providers.openai :as openai]
-            [hyperphor.ellellem.providers.anthropic :as anthropic]))
+            [hyperphor.ellum.core :as llm]
+            [hyperphor.ellum.tools :as tools]
+            [hyperphor.ellum.schema :as schema]
+            [hyperphor.ellum.util :as util]
+            [hyperphor.ellum.providers.openai :as openai]
+            [hyperphor.ellum.providers.anthropic :as anthropic]))
 
 ;;; Unit tests — no API calls required
 
@@ -115,7 +115,7 @@
                :usage {:input_tokens 5 :output_tokens 0}}
           normalized (anthropic/normalize-response raw)]
       (is (= :refusal (:stop-reason normalized)))
-      (is (= "Claude declined to respond (no explanation provided)."
+      (is (= "No explanation given"
              (:refusal normalized)))))
   (testing "explanatory text present is surfaced as the refusal"
     (let [raw {:content [{:type "text" :text "I can't help with that request."}]
@@ -189,7 +189,7 @@
       (is (= [] ((:history session)))))))
 
 (comment
-  ;;; Integration tests — require API keys
+  ;;; Integration tests — require API keys TODO set this up
 
   (llm/query :openai "Say hello in one word")
 

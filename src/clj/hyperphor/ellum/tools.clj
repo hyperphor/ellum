@@ -1,4 +1,4 @@
-(ns hyperphor.ellellem.tools
+(ns hyperphor.ellum.tools
   (:require [clojure.data.json :as json]))
 
 ;;; Tool definition format:

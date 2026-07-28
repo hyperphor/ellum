@@ -1,8 +1,8 @@
-(ns hyperphor.ellellem.providers.anthropic
+(ns hyperphor.ellum.providers.anthropic
   (:require [hato.client :as client]
             [clojure.data.json :as json]
             [environ.core :as env]
-            [hyperphor.ellellem.util :as util]))
+            [hyperphor.ellum.util :as util]))
 
 (def default-model "claude-opus-4-8")
 (def base-url "https://api.anthropic.com/v1")
@@ -57,7 +57,7 @@
   (when (= type "text") text))
 
 (defn- content-block->tool-call
-  "Convert an Anthropic tool_use block to ellellem normalized tool call."
+  "Convert an Anthropic tool_use block to ellum normalized tool call."
   [{:keys [type id name input]}]
   (when (= type "tool_use")
     {:id id :name name :arguments input}))
@@ -72,7 +72,7 @@
     (keyword stop-reason)))
 
 (defn normalize-response
-  "Convert a raw Anthropic Messages response to the ellellem normalized format."
+  "Convert a raw Anthropic Messages response to the ellum normalized format."
   [response]
   (let [content-blocks (:content response)
         text (->> content-blocks
@@ -104,7 +104,7 @@
    :input_schema parameters})
 
 (defn- message->anthropic
-  "Convert an ellellem message to Anthropic Messages API format.
+  "Convert an ellum message to Anthropic Messages API format.
   Handles user/assistant/tool-result messages.
   Tool results are user messages with content of type 'tool_result'."
   [{:keys [role content tool-calls tool-result-id]}]

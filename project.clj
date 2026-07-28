@@ -1,6 +1,6 @@
-(defproject com.hyperphor/ellellem "0.1.2"
+(defproject com.hyperphor/ellum "0.1.2"
   :description "Unified multi-provider LLM client library (Clojure port of ellmer)"
-  :url "https://github.com/hyperphor/ellellem"
+  :url "https://github.com/hyperphor/ellum"
   :license {:name "MIT"}
   :dependencies [[org.clojure/clojure "1.11.3"]
                  [hato "1.0.0"]

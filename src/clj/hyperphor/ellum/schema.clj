@@ -1,6 +1,6 @@
-(ns hyperphor.ellellem.schema
+(ns hyperphor.ellum.schema
   (:require [clojure.data.json :as json]
-            [hyperphor.ellellem.util :as util]))
+            [hyperphor.ellum.util :as util]))
 
 ;;; JSON Schema helpers for structured output
 

@@ -1,10 +1,10 @@
-(ns hyperphor.ellellem.tools.weather
+(ns hyperphor.ellum.tools.weather
   (:require [hato.client :as client]
             [clojure.data.json :as json]
             [environ.core :as env]
             [clojure.string :as str]
-            [hyperphor.ellellem.util :as util]
-            [hyperphor.ellellem.core :as core]))
+            [hyperphor.ellum.util :as util]
+            [hyperphor.ellum.core :as core]))
 
 (defn weather-api-key []
   (or (env/env :weather-api-key)

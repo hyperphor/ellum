@@ -1,9 +1,9 @@
-(ns hyperphor.ellellem.providers.openai
+(ns hyperphor.ellum.providers.openai
   (:require [hato.client :as client]
             [clojure.data.json :as json]
             [environ.core :as env]
             [clojure.string :as str]
-            [hyperphor.ellellem.util :as util]))
+            [hyperphor.ellum.util :as util]))
 
 (def default-model "gpt-4.1")
 (def base-url "https://api.openai.com/v1")
@@ -66,7 +66,7 @@
     (keyword finish-reason)))
 
 (defn normalize-response
-  "Convert a raw OpenAI chat completions response to the ellellem normalized format.
+  "Convert a raw OpenAI chat completions response to the ellum normalized format.
   A model refusal (message.refusal set, e.g. under structured outputs) is surfaced
   as :refusal with :stop-reason :refusal, since finish_reason alone doesn't signal it."
   [response]
@@ -95,8 +95,8 @@
               :parameters parameters}})
 
 (defn- messages->openai
-  "Convert normalized ellellem messages to OpenAI format.
-  ellellem messages can have :role :user/:assistant/:tool/:system and :content.
+  "Convert normalized ellum messages to OpenAI format.
+  ellum messages can have :role :user/:assistant/:tool/:system and :content.
   Tool result messages have :tool-call-id."
   [messages]
   (mapv (fn [msg]

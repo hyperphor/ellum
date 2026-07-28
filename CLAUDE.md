@@ -15,7 +15,7 @@ This project uses Leiningen (matching sibling project conventions):
 ```bash
 lein repl          # start REPL
 lein test          # run all tests
-lein test :only hyperphor.ellellem.core-test/my-test   # run single test
+lein test :only hyperphor.ellum.core-test/my-test   # run single test
 ```
 
 ## Architecture
@@ -23,7 +23,7 @@ lein test :only hyperphor.ellellem.core-test/my-test   # run single test
 ### Namespace layout
 
 ```
-src/clj/hyperphor/ellellem/
+src/clj/hyperphor/ellum/
   core.clj          — public API surface
   providers/
     openai.clj      — OpenAI chat completions + responses API

@@ -1,4 +1,4 @@
-(ns hyperphor.ellellem.util
+(ns hyperphor.ellum.util
   (:require [clojure.data.json :as json]
             [clojure.string :as str])
   (:import [java.io BufferedReader InputStreamReader]))

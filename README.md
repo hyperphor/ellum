@@ -1,4 +1,4 @@
-# What is ellellem?
+# What is ellum?
 
 a unified, multi-provider LLM client library supporting chat, tool calling, and structured schema output. 
 

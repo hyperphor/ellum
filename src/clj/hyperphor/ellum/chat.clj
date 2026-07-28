@@ -1,5 +1,5 @@
-(ns hyperphor.ellellem.chat
-  (:require [hyperphor.ellellem.tools :as tools]))
+(ns hyperphor.ellum.chat
+  (:require [hyperphor.ellum.tools :as tools]))
 
 ;;; Conversation state management
 

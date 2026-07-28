@@ -1,10 +1,10 @@
-(ns hyperphor.ellellem.core
-  (:require [hyperphor.ellellem.providers.openai :as openai]
-            [hyperphor.ellellem.providers.anthropic :as anthropic]
-            [hyperphor.ellellem.chat :as chat]
-            [hyperphor.ellellem.tools :as tools]
-            [hyperphor.ellellem.schema :as schema]
-            [hyperphor.ellellem.util :as util]))
+(ns hyperphor.ellum.core
+  (:require [hyperphor.ellum.providers.openai :as openai]
+            [hyperphor.ellum.providers.anthropic :as anthropic]
+            [hyperphor.ellum.chat :as chat]
+            [hyperphor.ellum.tools :as tools]
+            [hyperphor.ellum.schema :as schema]
+            [hyperphor.ellum.util :as util]))
 
 ;;; Provider dispatch
 
