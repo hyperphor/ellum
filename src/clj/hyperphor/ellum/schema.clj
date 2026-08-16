@@ -1,15 +1,16 @@
 (ns hyperphor.ellum.schema
   (:require [clojure.data.json :as json]
+            [hyperphor.multitool.core :as u]
             [hyperphor.ellum.util :as util]))
 
 ;;; JSON Schema helpers for structured output
 
 (defn object-schema
   "Build a JSON Schema object definition."
-  [properties & {:keys [required] :or {required []}}]
+  [properties & {:keys [required]}]
   {:type "object"
    :properties properties
-   :required required
+   :required (or required (mapv name (keys properties)))
    :additionalProperties false})
 
 (defn array-schema
@@ -87,3 +88,4 @@
       (when-not (contains? value field)
         (throw (ex-info (str "Missing required field: " field)
                         {:field field :value value}))))))
+

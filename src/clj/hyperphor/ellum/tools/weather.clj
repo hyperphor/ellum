@@ -13,7 +13,7 @@
 (defn get-weather
   [loc]
   (let [full (client/get "http://api.weatherapi.com/v1/current.json"
-              {:query-params {:key weather-api-key
+              {:query-params {:key (weather-api-key)
                               :q loc}
                :as :json})
         current   (-> full

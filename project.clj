@@ -1,12 +1,12 @@
-(defproject com.hyperphor/ellum "0.1.2"
-  :description "Unified multi-provider LLM client library (Clojure port of ellmer)"
+(defproject com.hyperphor/ellum "0.1.3"
+  :description "Unified multi-provider LLM client library"
   :url "https://github.com/hyperphor/ellum"
   :license {:name "MIT"}
   :dependencies [[org.clojure/clojure "1.11.3"]
                  [hato "1.0.0"]
-                 [org.clojure/data.json "2.5.0"]
+                 [org.clojure/data.json "2.5.2"]
                  [environ "1.2.0"]
-                 [com.hyperphor/multitool "0.2.4"]
+                 [com.hyperphor/multitool "0.3.0"]
                  [org.clojure/core.async "1.6.681"]]
   :source-paths ["src/clj"]
   :test-paths ["test/clj"]

@@ -40,6 +40,15 @@
   (throw (ex-info (str "Unknown provider: " provider)
                   {:provider provider})))
 
+(defmulti -key-status :provider)
+
+(defmethod -key-status :anthropic [{:keys [model]}]
+  (apply anthropic/rate-limit-status (when model [:model model])))
+
+(defmethod -key-status :default [req]
+  (throw (ex-info (str "key-status not implemented for provider: " (:provider req))
+                  {:req req})))
+
 ;;; Public API
 
 (defn complete
@@ -72,6 +81,19 @@
   Returns a vector of {:id :created :raw} (:name also present for :anthropic)."
   [provider]
   (-list-models provider))
+
+(defn key-status
+  "Get the current rate-limit standing for a provider's API key.
+  req: {:provider :anthropic :model \"...\"} (:model optional).
+  Currently implemented for :anthropic only — makes a minimal request and
+  returns the provider's rate-limit response headers as
+  {:requests {:limit :remaining :reset} :tokens {...} :input-tokens {...} :output-tokens {...}}.
+
+  Full billing/cost data requires an Anthropic Admin API key
+  (ANTHROPIC_ADMIN_API_KEY, distinct from a standard API key) — see
+  hyperphor.ellum.providers.anthropic/usage-report and /cost-report."
+  [req]
+  (-key-status req))
 
 (defn- ensure-content
   "Return the :content of a normalized response, or throw an informative error
