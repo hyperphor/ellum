@@ -4,6 +4,7 @@
   :license {:name "MIT"}
   :dependencies [[org.clojure/clojure "1.11.3"]
                  [hato "1.0.0"]
+                 [cheshire "6.1.0"]      ; hato's `:as :json` silently no-ops without this
                  [org.clojure/data.json "2.5.2"]
                  [environ "1.2.0"]
                  [com.hyperphor/multitool "0.3.0"]
