@@ -137,48 +137,144 @@
   [x]
   (if (map? x) x {:url x}))
 
-(defn mcp-post
-  "POSTs a JSON-RPC `command` to an MCP server. `config` is either a bare URL
-   string, or {:url ... :auth {...}} - see get-access-token for :auth shapes.
-   Throws ex-info on a non-2xx MCP response (eg a 401 pointing at the OAuth
-   server via WWW-Authenticate); otherwise returns the hato response with
-   :body coerced to a parsed map (see coerce-mcp-body)."
-  [config command]
-  (let [{:keys [url auth]} (->config config)
-        token   (get-access-token auth)
-        payload {:jsonrpc "2.0"
-                 :id (str (gensym))
-                 :method command
-                 :params {:protocolVersion "2025-06-18",
-                          :capabilities {},
-                          :clientInfo {:name "my-client", :version "0.1"}
-                          }}
-        resp (client/post url
-                           {:body             (json/write-str payload)
-                            :content-type     :application/json
-                            :accept           "application/json, text/event-stream"
-                            :headers          (when token {"Authorization" (str "Bearer " token)})
-                            :as               :string ;; :json is content-type-blind, so we coerce below
-                            :throw-exceptions false})
+(defn- rpc-post
+  "Raw JSON-RPC POST: `msg` is a full JSON-RPC 2.0 message map (a request
+   has :id, a notification omits it - the caller decides which). Attaches
+   auth and session headers, coerces the response body per its
+   Content-Type. Returns {:status :body :session-id}; throws ex-info on a
+   non-2xx HTTP response (eg a 401 pointing at the OAuth server via
+   WWW-Authenticate) but does NOT check for a JSON-RPC-level :error in the
+   body - callers that expect one should check it themselves."
+  [{:keys [url auth]} msg session-id]
+  (let [token (get-access-token auth)
+        resp  (client/post url
+                            {:body             (json/write-str msg)
+                             :content-type     :application/json
+                             :accept           "application/json, text/event-stream"
+                             :headers          (cond-> {}
+                                                 token      (assoc "Authorization" (str "Bearer " token))
+                                                 session-id (assoc "Mcp-Session-Id" session-id))
+                             :as               :string ;; :json is content-type-blind, so we coerce below
+                             :throw-exceptions false})
         content-type (get-in resp [:headers "content-type"])
         body         (coerce-mcp-body (:body resp) content-type)]
     (if (< (:status resp) 400)
-      (assoc resp :body body)
+      {:status (:status resp) :body body
+       :session-id (get-in resp [:headers "mcp-session-id"])}
       (throw (ex-info (str "MCP request failed: " (:status resp))
                        {:url url :status (:status resp) :body body
                         :www-authenticate (get-in resp [:headers "www-authenticate"])})))))
+
+(defn- check-rpc-error!
+  "Throws ex-info if `body` (a parsed JSON-RPC envelope) carries an :error -
+   JSON-RPC returns these with a normal 2xx HTTP status, so rpc-post's own
+   HTTP-level check doesn't catch them."
+  [body context]
+  (when (:error body)
+    (throw (ex-info (str "MCP error: " (get-in body [:error :message] "unknown"))
+                     (assoc context :error (:error body))))))
+
+(def ^:private session-cache
+  "url -> Mcp-Session-Id string handed back by that server's initialize
+   response, or ::none once confirmed the server doesn't use sessions (so
+   initialize! doesn't redo the handshake on every call). Keyed on :url
+   alone, not :auth - fine for the expected one-identity-per-server-per-
+   process usage; a process juggling multiple identities against the same
+   url would need finer keying."
+  (atom {}))
+
+(defn- initialize!
+  "Performs the MCP initialize handshake for config's url, once per url per
+   process: POSTs `initialize` (carrying protocolVersion/capabilities/
+   clientInfo - the only call these belong on, unlike the old code sending
+   them with every request), caches any Mcp-Session-Id the server hands
+   back, then fires the notifications/initialized notification per spec.
+   Some servers don't implement that notification's endpoint at all, so its
+   failure is swallowed rather than aborting the session - it's advisory,
+   nothing downstream depends on its response.
+   Returns the session id to send on subsequent requests, or nil."
+  [{:keys [url] :as config}]
+  (when-not (contains? @session-cache url)
+    (let [{:keys [body session-id]}
+          (rpc-post config
+                    {:jsonrpc "2.0" :id (str (gensym))
+                     :method "initialize"
+                     :params {:protocolVersion "2025-06-18"
+                              :capabilities {}
+                              :clientInfo {:name "ellum" :version "0.1"}}}
+                    nil)]
+      (check-rpc-error! body {:url url :method "initialize"})
+      (swap! session-cache assoc url (or session-id ::none))
+      (try
+        (rpc-post config
+                  {:jsonrpc "2.0" :method "notifications/initialized" :params {}}
+                  session-id)
+        (catch Exception _ nil))))
+  (let [sid (get @session-cache url)]
+    (when-not (= sid ::none) sid)))
+
+(defn mcp-post
+  "Sends a JSON-RPC `method` call (with optional `params`, default {}) to
+   an MCP server, after ensuring the initialize handshake has run (see
+   initialize!). `config` is either a bare URL string, or {:url ... :auth
+   ...} - see get-access-token for :auth shapes. Throws ex-info on a
+   non-2xx HTTP response or a JSON-RPC :error result; otherwise returns
+   {:status :body}, :body the parsed {:jsonrpc :id :result ...} envelope."
+  ([config method] (mcp-post config method {}))
+  ([config method params]
+   (let [config     (->config config)
+         session-id (initialize! config)
+         resp       (rpc-post config
+                               {:jsonrpc "2.0" :id (str (gensym))
+                                :method method :params params}
+                               session-id)]
+     (check-rpc-error! (:body resp) {:url (:url config) :method method})
+     resp)))
 
 (defn mcp-tools
   [config]
   (-> config
       (mcp-post "tools/list")
-      :body
-      :result
-      :tools))
+      :body :result :tools))
+
+(defn- unpack-tool-result
+  "Collapses an MCP tools/call result ({:content [...] :isError bool
+   :structuredContent {...}}) into a plain value, for use as an ellum
+   tool's return value (see tools.clj's {:fn ...} contract). MCP represents
+   a failed tool call as :isError true rather than a JSON-RPC :error,
+   precisely so the LLM can see and react to it - ellum's tools/dispatch
+   has no such convention, so surface it as a thrown exception like any
+   other failed :fn. Prefers :structuredContent when the tool declares an
+   outputSchema; otherwise joins all-text content into a single string;
+   falls back to the raw content vector for image/resource/etc results
+   that can't meaningfully collapse to a string."
+  [{:keys [content structuredContent isError]}]
+  (when isError
+    (throw (ex-info "MCP tool call returned an error" {:content content})))
+  (cond
+    structuredContent structuredContent
+    (every? #(= (:type %) "text") content) (str/join "\n" (map :text content))
+    :else content))
+
+(defn mcp-call
+  "Calls MCP tool `tool-name` with `arguments` (a map, default {}) via
+   tools/call. Returns the unpacked result value - see unpack-tool-result."
+  ([config tool-name] (mcp-call config tool-name {}))
+  ([config tool-name arguments]
+   (-> (mcp-post config "tools/call" {:name tool-name :arguments (or arguments {})})
+       :body :result
+       unpack-tool-result)))
 
 (comment
   (mcp-tools "https://mcp.deepwiki.com/mcp")
   (mcp-tools "https://docs.mcp.cloudflare.com/mcp")
+
+  (mcp-call "https://mcp.deepwiki.com/mcp" "read_wiki_structure" {:repoName "facebook/react"})
+  (mcp-call "https://mcp.deepwiki.com/mcp" "ask_question" {:repoName "axios/axios" :question "What the heck is this repo for?"})
+
+  (mcp-tools "https://wd-mcp.wmcloud.org/mcp/")
+  (mcp-call "https://wd-mcp.wmcloud.org/mcp/" "search_items" {:query "Uri Caine"})
+  (mcp-call "https://wd-mcp.wmcloud.org/mcp/" "get_statements" {:entity_id "Q1343710"})
 
   ;; Cirro's MCP endpoint - delegate to okc.cirro's own get-access-token
   ;; (functional :auth) rather than reimplementing its Cognito
@@ -186,6 +282,9 @@
   (require '[org.parkerici.okc.sources.cirro :as cirro])
   (mcp-tools {:url "https://dev.cirro.bio/api/mcp"
               :auth (partial cirro/get-access-token cirro-db)}) ;cirro-db per cirro.clj's api-post
+
+
+
 
   ;; A plain generic OAuth2 client-credentials server, by contrast, needs
   ;; no delegate - the declarative :client-credentials shape covers it
@@ -202,5 +301,5 @@
               :auth {:type :bearer
                      :token "<github pat token>"}})
 
-  
+
   )

@@ -114,6 +114,14 @@
 
 ;;; Main complete function
 
+;; o-series and gpt-5.x ("reasoning") models reject `max_tokens` on chat
+;; completions -- they want `max_completion_tokens` instead.
+(defn- reasoning-model? [model]
+  (boolean (re-find #"^(o\d|gpt-5)" model)))
+
+(defn- max-tokens-key [model]
+  (if (reasoning-model? model) :max_completion_tokens :max_tokens))
+
 (defn complete
   "Call OpenAI chat completions API.
   req keys: :model :messages :system :tools :max-tokens :response-format :stream"
@@ -123,7 +131,7 @@
         all-messages (concat system-msg messages)
         body (cond-> {:model model
                       :messages (messages->openai all-messages)
-                      :max_tokens max-tokens}
+                      (max-tokens-key model) max-tokens}
                tools (assoc :tools (mapv serialize-tool tools))
                response-format (assoc :response_format response-format))]
     (-> (api-post "/chat/completions" body)
@@ -137,7 +145,7 @@
         all-messages (concat system-msg messages)
         body (cond-> {:model model
                       :messages (messages->openai all-messages)
-                      :max_tokens max-tokens
+                      (max-tokens-key model) max-tokens
                       :stream true}
                tools (assoc :tools (mapv serialize-tool tools)))]
     (util/parse-sse-stream (api-post-stream "/chat/completions" body))))

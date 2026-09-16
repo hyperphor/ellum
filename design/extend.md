@@ -17,6 +17,14 @@ Produces:
  
  Cute solution and even more general then the spec since it takes an arbitrary number of arguments.
  
+## Open questions
+
+This is the sort of functionality that should be everywhere (on u/) but too many dependencies. 
+
+Where to store results (namespace and file) also open to question.
+
+
+
 ## Is this useful?
 
 Maybe for small utility functions, the kind of thing that goes in multtool. Not very useful for writing code in real systems, where the pieces depend on each other. Claude Code etc can do this.
