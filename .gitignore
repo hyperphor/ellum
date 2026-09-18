@@ -1,0 +1,9 @@
+pom.xml
+target/
+scrap/
+out/
+.lein-failures
+.claude
+.nrepl-port
+scrap/
+
