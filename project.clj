@@ -2,7 +2,9 @@
   :description "Unified multi-provider LLM client library"
   :url "https://github.com/hyperphor/ellum"
   :license {:name "MIT"}
-  :deploy-repositories [["clojars" {:sign-releases false}]]
+  :deploy-repositories [["clojars" {:sign-releases false
+                                     :username :env/clojars_username
+                                     :password :env/clojars_password}]]
   :dependencies [[org.clojure/clojure "1.11.3"]
                  [hato "1.0.0"]
                  [cheshire "6.1.0"]      ; hato's `:as :json` silently no-ops without this
