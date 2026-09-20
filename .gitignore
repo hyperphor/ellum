@@ -6,4 +6,5 @@ out/
 .claude
 .nrepl-port
 scrap/
+checkouts/
 
