@@ -1,4 +1,4 @@
-(defproject com.hyperphor/ellum "0.1.5"
+(defproject com.hyperphor/ellum "0.1.6"
   :description "Unified multi-provider LLM client library"
   :url "https://github.com/hyperphor/ellum"
   :license {:name "MIT"}
