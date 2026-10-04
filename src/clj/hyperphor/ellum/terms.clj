@@ -2,6 +2,8 @@
   (:require [hyperphor.ellum.core :as core]
             [hyperphor.ellum.extract :as e]
             [hyperphor.multitool.core :as u]
+            [hyperphor.multitool.cljcore :as ju]
+            [hyperphor.multitool.graph :as graph]
             [clojure.string :as str]))
 
 ;;; Originally from ELI, but it seems generally useful
@@ -26,6 +28,176 @@
          :model "gpt-4o")
         e/extract-json
         first)))
+
+;;; TODO find the version that took a fiction/real argument...
+(defn generate-instances
+  [category n]
+  (-> (core/query
+         :openai
+         (u/tx "Generate {{n}} instances of {{category}}.  Return results as a json vector of strings.")
+         :model "gpt-4o"
+         )
+        e/extract-json
+        first))
+
+(defn entailments
+  [terms]
+  (let [terms (str/join ", " terms)]
+    (-> (core/query
+         :openai
+         (u/tx "for each term, generate the list of terms that are logically prior, or need to be understood first. Return a json map {term: [priods]...}: {{terms}}")
+         :model "gpt-4o")
+        e/extract-json
+        first)))
+
+
+;;; generalizing the above
+
+(defn instance-relations
+  "Given `instances` (a seq of strings, already generated), ask the LLM for the
+  list of other instances that are `relation` to each one. Returns a json map
+  {instance: [related...]}."
+  [instances relation]
+  (let [instances (str/join ", " instances)]
+    (-> (core/query
+         :openai
+         (u/tx "for each element of the list, generate the list of other entries that are {{relation}} to it. Return a json map {term: [related,]...}: {{instances}}")
+         :model "gpt-4o"
+         :max-tokens 16000)
+        (e/extract-json :key-fn identity)
+        first)))
+
+(defn relations
+  [category relation n]
+  (let [instances (generate-instances category n)]
+    (prn :instances instances)
+    (instance-relations instances relation)))
+
+
+;;; TODO use to color nodes in the graph
+(defn categorized
+  [terms n]
+  (-> (core/query :openai (u/tx "look at all the terms and come up with {{n}} categories that they fit into, return as json map of category to list of terms: {{terms}}"))
+      (e/extract-json :key-fn identity)
+      first
+      ))
+
+
+
+(defn graph-relations
+  [& args]
+  (let [data (apply relations args)
+        dir (ju/temp-dir-path)]
+    ;; (u/map-invert-multiple e)
+    (graph/generate! data dir)
+    (ju/open-url (u/tx "file://{{dir}}/graph.html"))))
+
+
+
+(comment
+  (graph-relations "musical genres" "influenced" 100))
+
+;;; Parsing a pre-written (eg LLM-generated) markdown term list, as opposed to
+;;; generating one. Expects `## Category` headers over blocks of
+;;; `N. **Term** — description` lines (see input/socialism.md).
+
+(def ^:private term-line-re #"\d+\.\s+\*\*(.+?)\*\*\s+[—-]\s+(.+)")
+
+(defn parse-term-list
+  "Parse markdown `text` into [{:term :category :description}...].
+  `:category` is the full text of the nearest preceding `## ` header."
+  [text]
+  (->> (str/split text #"(?m)^##\s+")
+       rest
+       (mapcat
+        (fn [section]
+          (let [[header & lines] (str/split-lines section)
+                category (str/trim header)]
+            (keep (fn [line]
+                    (when-let [[_ term description] (re-matches term-line-re (str/trim line))]
+                      {:term term :category category :description description}))
+                  lines))))
+       vec))
+
+;;; Hand-assigned short keys + a fixed-order categorical palette (see
+;;; dataviz skill) for the categories found in input/socialism.md. Node
+;;; labels always carry the term name, so color here is a secondary cue,
+;;; not the only way to tell categories apart.
+(def socialism-categories
+  {"Foundations: Method and Materialism"        {:key :foundations           :color "#2a78d6"}
+   "Political Economy"                          {:key :political-economy     :color "#eb6834"}
+   "Classes and the Working Class"              {:key :classes               :color "#1baf7a"}
+   "The State and Revolution"                   {:key :state-and-revolution  :color "#eda100"}
+   "The Party and Organization"                 {:key :party-and-organization :color "#e87ba4"}
+   "Imperialism and the International Struggle" {:key :imperialism           :color "#008300"}
+   "The Movement and Its History"               {:key :movement-history      :color "#4a3aa7"}})
+
+(defn categorize-term-list
+  "Replace each entry's full-header :category with its short keyword key,
+  using `categories` (a map as in `socialism-categories`)."
+  [entries categories]
+  (mapv (fn [{:keys [category] :as entry}]
+          (assoc entry :category (get-in categories [category :key])))
+        entries))
+
+(defn term-list->graph
+  "Build a {:graph {term [related...]} :node-color (fn node -> color)
+  :popup-fn (fn node -> {:category :color :description}) :legend [[label color]...]}
+  from parsed `entries` (as from `parse-term-list`/`categorize-term-list`),
+  `categories` (key -> {:color}), and a `relation` description for the LLM
+  relation query."
+  [entries categories relation]
+  (let [terms (mapv :term entries)
+        known? (set terms)
+        term->category (into {} (map (juxt :term :category) entries))
+        term->description (into {} (map (juxt :term :description) entries))
+        key->color (into {} (map (fn [[_ {:keys [key color]}]] [key color]) categories))
+        key->label (into {} (map (fn [[header {:keys [key]}]] [key header]) categories))
+        ;; LLM occasionally answers with an abbreviated/hallucinated term not
+        ;; in the source list (eg "Revolution" for "Socialist revolution"),
+        ;; or includes the term itself; drop both rather than let them show
+        ;; up as uncategorized orphan nodes or self-loops.
+        relations-map (into {} (for [[term related] (instance-relations terms relation)]
+                                  [term (vec (remove #{term} (filter known? related)))]))]
+    {:graph relations-map
+     :node-color (fn [node]
+                   (get key->color (term->category node) "#cccccc"))
+     :popup-fn (fn [node]
+                 (let [category (term->category node)]
+                   {:category (get key->label category "")
+                    :color (get key->color category "#cccccc")
+                    :description (get term->description node)}))
+     :legend (for [[header {:keys [color]}] categories]
+               [header color])}))
+
+(defn graph-term-list!
+  "Parse `md` as a term list, fetch relations among its terms, and write a
+  colored, legended graph site (with hover-popup descriptions) to a temp
+  dir, opening it in a browser. `categories` maps full header text ->
+  {:key :color} (see `socialism-categories`)."
+  [md categories relation]
+  (let [entries (categorize-term-list (parse-term-list md) categories)
+        {:keys [graph node-color popup-fn legend]} (term-list->graph entries categories relation)
+        dir (ju/temp-dir-path)]
+    (graph/generate!
+     graph dir
+     {:node-color node-color
+      :popup-fn popup-fn
+      :legend legend
+      :index? true
+      :search? true})
+    (ju/open-url (u/tx "file://{{dir}}/index.html"))
+    {:entries entries :graph graph :dir dir}))
+
+(comment
+  (graph-term-list! (slurp "input/socialism.md") socialism-categories "closely related to"))
+
+
+
+
+(comment
+  )
+
 
 ;;; OK this is more ELI specific, but what the hell
 (defn generate-personas
