@@ -67,7 +67,7 @@
         (e/extract-json :key-fn identity)
         first)))
 
-(defn relations
+(defn category-relations
   [category relation n]
   (let [instances (generate-instances category n)]
     (prn :instances instances)
@@ -77,16 +77,30 @@
 ;;; TODO use to color nodes in the graph
 (defn categorized
   [terms n]
-  (-> (core/query :openai (u/tx "look at all the terms and come up with {{n}} categories that they fit into, return as json map of category to list of terms: {{terms}}"))
+  (-> (core/query :openai
+                   (u/tx "look at all the terms and come up with {{n}} categories that they fit into, return as json map of category to list of terms: {{terms}}")
+                   :max-tokens 8000)
       (e/extract-json :key-fn identity)
       first
       ))
 
+(defn descriptions
+  "Ask the LLM for a short (one- or two-sentence) glossary-style description
+  of each of `terms`. Returns a json map {term: description}."
+  [terms]
+  (let [terms (str/join ", " terms)]
+    (-> (core/query
+         :openai
+         (u/tx "for each term, write a concise one- or two-sentence description suitable as a glossary entry. Return a json map {term: description, ...}: {{terms}}")
+         :model "gpt-4o"
+         :max-tokens 16000)
+        (e/extract-json :key-fn identity)
+        first)))
 
 
 (defn graph-relations
   [& args]
-  (let [data (apply relations args)
+  (let [data (apply category-relations args)
         dir (ju/temp-dir-path)]
     ;; (u/map-invert-multiple e)
     (graph/generate! data dir)
@@ -192,6 +206,83 @@
 (comment
   (graph-term-list! (slurp "input/socialism.md") socialism-categories "closely related to"))
 
+;;; Fully generated pipeline: no pre-written markdown, categories and
+;;; descriptions are themselves LLM-generated. See dataviz skill for the
+;;; fixed-order categorical palette this slices from.
+(def categorical-palette
+  ["#2a78d6" "#eb6834" "#1baf7a" "#eda100" "#e87ba4" "#008300" "#4a3aa7" "#e34948"])
+
+(defn- slugify
+  [s]
+  (-> s str/lower-case (str/replace #"[^a-z0-9]+" "-") (str/replace #"(^-|-$)" "") keyword))
+
+(defn categories->meta
+  "Build a {category-name {:key :color}} map (the shape `term-list->graph`
+  expects) from `category->terms` (as returned by `categorized`), assigning
+  a short keyword key and a fixed-order categorical color per category."
+  [category->terms]
+  (into {} (map (fn [[category _] color] [category {:key (slugify category) :color color}])
+                category->terms
+                categorical-palette)))
+
+(def uncategorized-color "#999999")
+
+(defn generate-term-graph
+  "Generate `n` terms for `field`, sort them into `num-categories` categories,
+  describe each, and fetch `relation` relations among them. Returns the same
+  shape as `term-list->graph`, plus :entries and :categories."
+  [field n num-categories relation]
+  (let [terms (generate-terms field n)
+        known? (set terms)
+        category->terms (categorized terms num-categories)
+        categories (categories->meta category->terms)
+        ;; as with instance-relations, the LLM can echo back a term slightly
+        ;; reworded inside a category list; only trust assignments that match
+        ;; a term we actually generated.
+        term->category-name (into {} (for [[category cat-terms] category->terms
+                                            term cat-terms
+                                            :when (known? term)]
+                                        [term category]))
+        ;; the categorization call sometimes drops a handful of terms rather
+        ;; than miscategorizing them; give those a visible fallback bucket
+        ;; instead of silently losing them from the graph.
+        uncategorized (remove term->category-name terms)
+        categories (if (seq uncategorized)
+                     (assoc categories "Uncategorized" {:key :uncategorized :color uncategorized-color})
+                     categories)
+        term->category-name (into term->category-name (map vector uncategorized (repeat "Uncategorized")))
+        term->description (descriptions terms)
+        entries (mapv (fn [term]
+                         {:term term
+                          :category (get-in categories [(term->category-name term) :key])
+                          :description (get term->description term)})
+                       terms)]
+    (merge (term-list->graph entries categories relation)
+           {:entries entries :categories categories})))
+
+(defn graph-generated-terms!
+  "Generate `n` terms for `field`, sort into `num-categories` categories,
+  describe each, fetch `relation` relations, and write a colored, legended,
+  hover-popup graph site to a temp dir, opening it in a browser."
+  [field n num-categories relation]
+  (let [{:keys [graph node-color popup-fn legend] :as result}
+        (generate-term-graph field n num-categories relation)
+        dir (ju/temp-dir-path)]
+    (graph/generate!
+     graph dir
+     {:node-color node-color
+      :popup-fn popup-fn
+      :legend legend
+      :index? true
+      :search? true
+      :width 200
+      :height 200})
+    (ju/open-url (u/tx "file://{{dir}}/index.html"))
+    (assoc result :dir dir)))
+
+(comment
+  (graph-generated-terms! "cybernetics" 100 5 "logically prior to, or a prerequisite for understanding"))
+
 
 
 
@@ -220,3 +311,10 @@
    "Expert Edwin: Edwin is a certified feline behaviorist who has been working with cats for over twenty years. He is familiar with advanced topics such as breed-specific behaviors, feline body language, and the psychological impacts of environmental changes. Edwin is frequently consulted by veterinarians and shelters for his expertise."])
 
 ;;; Don't really need extend-personas because extend-terms works 
+
+
+(comment
+  ;; Cybernetics
+  (def cyber-concepts ["Feedback Loop" "Homeostasis" "Autopoiesis" "Cybernetics of Cybernetics" "Norbert Wiener" "Second-order Cybernetics" "Control Theory" "Complex Adaptive Systems" "Black Box" "Artificial Intelligence" "Self-organization" "System Dynamics" "Modeling" "Stability" "Perception-Action Cycle" "Information Theory" "Entropy" "Decision Theory" "Nonlinear Systems" "Observer Effect" "Adaptive Systems" "Robotics" "Communication Theory" "Bayesian Networks" "Dynamic Systems" "Emergence" "Interdisciplinary Approach" "Synchronization" "Machine Learning" "Artificial Neural Networks" "Viable Systems Model" "Signals and Systems" "Systemic Thinking" "Control Systems" "Feedback Control" "Redundancy" "Mathematical Modeling" "Bionics" "Ecology" "Resilience" "Artificial Life" "Cyber-physical Systems" "Human-Machine Interaction" "Complexity Theory" "Biocybernetics" "Sociocybernetics" "Cybernetics and Society" "System Identification" "Laws of Form" "Circular Causality"])
+
+  (core/query :openai (u/tx "look at all the terms and come up with 5 categories that they fit into, return as json map of category to list of terms: {{cyber-concepts}}")))
