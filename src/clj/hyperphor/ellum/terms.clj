@@ -4,6 +4,7 @@
             [hyperphor.multitool.core :as u]
             [hyperphor.multitool.cljcore :as ju]
             [hyperphor.multitool.graph :as graph]
+            [clojure.java.shell :as shell]
             [clojure.string :as str]))
 
 ;;; Originally from ELI, but it seems generally useful
@@ -96,6 +97,37 @@
          :max-tokens 16000)
         (e/extract-json :key-fn identity)
         first)))
+
+(defn mcp-descriptions
+  "Like `descriptions`, but via :anthropic with `mcp-servers` (as taken by
+  core/complete's :mcp-servers — Anthropic's MCP connector, see
+  design/mcp.md) attached, so the model can call out to a real external tool
+  while writing descriptions. Returns {:descriptions {term description,...}
+  :mcp-tool-uses [...] :mcp-tool-results [...]} — the latter two so a caller
+  can confirm the server was actually used, since they're otherwise easy to
+  wire up wrong and get silently-ungrounded output."
+  [terms mcp-servers]
+  (let [terms-str (str/join ", " terms)
+        response (core/complete
+                  {:provider :anthropic
+                   :messages [{:role :user
+                               :content
+                               (u/tx "for each term, write a concise one- or two-sentence description suitable as a glossary entry. For at most 5 terms that name a specific, well-known, real-world named vulnerability or exploit, use the available search tools once each to find a genuine real-world reference (eg a PoC repo or an issue/commit discussing it) and mention what you actually found in one clause. Write the rest from your own knowledge without calling tools. Never fabricate a citation — only mention something a tool call actually returned. Return a json map {term: description, ...}: {{terms-str}}")}]
+                   :mcp-servers mcp-servers
+                   :max-tokens 16000})]
+    {:descriptions (first (e/extract-json (:content response) :key-fn identity))
+     :mcp-tool-uses (:mcp-tool-uses response)
+     :mcp-tool-results (:mcp-tool-results response)}))
+
+(defn github-mcp-server
+  "GitHub's official remote MCP connector server, authenticated with the
+  caller's own `gh` CLI login (via `gh auth token`) rather than requiring a
+  separately-managed token. Exposes repo/issue/code search, not a dedicated
+  security-advisory API — see design/mcp.md."
+  []
+  {:name "github"
+   :url "https://api.githubcopilot.com/mcp/"
+   :authorization-token (str/trim (:out (shell/sh "gh" "auth" "token")))})
 
 
 (defn graph-relations
@@ -230,8 +262,12 @@
 (defn generate-term-graph
   "Generate `n` terms for `field`, sort them into `num-categories` categories,
   describe each, and fetch `relation` relations among them. Returns the same
-  shape as `term-list->graph`, plus :entries and :categories."
-  [field n num-categories relation]
+  shape as `term-list->graph`, plus :entries, :categories, and (when
+  `mcp-servers` is given) :mcp-tool-uses/:mcp-tool-results from the
+  description step — see `mcp-descriptions`.
+  `mcp-servers`, if given, routes the description step through
+  `mcp-descriptions` (Anthropic's MCP connector) instead of plain `descriptions`."
+  [field n num-categories relation & [mcp-servers]]
   (let [terms (generate-terms field n)
         known? (set terms)
         category->terms (categorized terms num-categories)
@@ -251,22 +287,27 @@
                      (assoc categories "Uncategorized" {:key :uncategorized :color uncategorized-color})
                      categories)
         term->category-name (into term->category-name (map vector uncategorized (repeat "Uncategorized")))
-        term->description (descriptions terms)
+        {:keys [descriptions mcp-tool-uses mcp-tool-results]}
+        (if mcp-servers
+          (mcp-descriptions terms mcp-servers)
+          {:descriptions (descriptions terms)})
         entries (mapv (fn [term]
                          {:term term
                           :category (get-in categories [(term->category-name term) :key])
-                          :description (get term->description term)})
+                          :description (get descriptions term)})
                        terms)]
     (merge (term-list->graph entries categories relation)
-           {:entries entries :categories categories})))
+           {:entries entries :categories categories
+            :mcp-tool-uses mcp-tool-uses :mcp-tool-results mcp-tool-results})))
 
 (defn graph-generated-terms!
   "Generate `n` terms for `field`, sort into `num-categories` categories,
   describe each, fetch `relation` relations, and write a colored, legended,
-  hover-popup graph site to a temp dir, opening it in a browser."
-  [field n num-categories relation]
+  hover-popup graph site to a temp dir, opening it in a browser. See
+  `generate-term-graph` for `mcp-servers`."
+  [field n num-categories relation & [mcp-servers]]
   (let [{:keys [graph node-color popup-fn legend] :as result}
-        (generate-term-graph field n num-categories relation)
+        (generate-term-graph field n num-categories relation mcp-servers)
         dir (ju/temp-dir-path)]
     (graph/generate!
      graph dir
@@ -283,11 +324,6 @@
 (comment
   (graph-generated-terms! "cybernetics" 100 5 "logically prior to, or a prerequisite for understanding"))
 
-
-
-
-(comment
-  )
 
 
 ;;; OK this is more ELI specific, but what the hell

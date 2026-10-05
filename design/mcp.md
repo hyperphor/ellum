@@ -51,3 +51,61 @@ error).
   subprocess rather than over HTTP.
 - TODO: resources/prompts primitives, and sampling (server-initiated LLM
   calls forwarded to core/complete).
+
+## Anthropic MCP connector (API-native, beta)
+
+Separate from `mcp_client.clj` above — this is Anthropic's own infrastructure
+calling a remote MCP server directly during a Messages API call, no local MCP
+client involved. Implemented in `providers/anthropic.clj`: `core/complete`
+(and `complete-stream`) take `:mcp-servers`, a seq of
+`{:name :url :authorization-token}`. For each server, ellum adds a
+`{:type "url" ...}` entry to the request's `:mcp_servers` *and* a matching
+`{:type "mcp_toolset" :mcp_server_name ...}` entry to `:tools` (the API
+requires both, kept in sync so callers don't hand-write the toolset side),
+and sets the `anthropic-beta: mcp-client-2025-11-20` header.
+
+Since the server executes the call itself, there's nothing for ellum to
+dispatch — the normalized response surfaces what happened via `:mcp-tool-uses`
+(`{:id :name :arguments :server}`) and `:mcp-tool-results`
+(`{:tool-use-id :content :error?}`) for inspection, distinct from the
+client-dispatched `:tool-calls`.
+
+Not implemented: `:authorization_token` is passed through as a plain string
+only — no OAuth flow, unlike `mcp_client.clj`'s `:auth` option. Anthropic-side
+only (`:anthropic` provider); no OpenAI equivalent exists.
+
+### Redesign
+
+I want to be able to create an LLM provider, say :anthropic-c3po, at runtime. This would work just like :anthropic provider but add the MCP server. I don't want to have to specify MCP in each call, although its ok to retain that capability. Basically want to extend the concept of providers to allow for customizations, with MCP being just one of them.
+
+(def c3po
+    (make-source
+        {:base-provider :anthropic
+	  :keyword :anthropic-c3po
+	:system-prompt "you are a protocol guru"   
+	:mcp-servers [{...}]
+	:default-model
+}))
+
+I'm sure there will be other parameters but hopefull you get the idea. Everything except :base-provider is optional
+
+When this is run, both c3po and :anthropic-c3po can be used as providers in all ellum calls
+
+#### Implemented
+
+`core/make-source`, in `core.clj`. Registers the config in an atom keyed by
+the provider keyword (`:keyword`, or an auto-generated one if omitted — so
+the returned value is always usable even unnamed) and returns that keyword.
+`core/complete`, `complete-stream`, `list-models`, `key-status`, and
+`query-structured` all resolve a custom provider to its `:base-provider`
+before dispatching, folding in the registered `:system-prompt` (used unless
+the call gives its own `:system`), `:mcp-servers` (the registered ones are
+prepended to any the call also passes — so you never *have* to repeat them,
+but still can add more per call), and `:default-model` (used unless the call
+gives its own `:model`). `run-agent`'s tool-result formatting (which branches
+on provider shape) also resolves first, so tool calls work the same as on
+the plain base provider.
+
+Not done: no way to unregister/list registered sources; no validation of
+`:base-provider` against actually-known providers (a typo registers fine and
+only fails on first use, same as an unknown plain provider keyword today).

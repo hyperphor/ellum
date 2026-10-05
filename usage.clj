@@ -49,6 +49,28 @@
 
 (key-status {:provider :anthropic})
 
+;; make-source: register a customized provider -- here, :anthropic with
+;; GitHub's MCP server baked in, so every call gets GitHub search tools and a
+;; steering system prompt without having to pass :mcp-servers each time.
+;; Uses the caller's own `gh auth token` rather than a separately-managed PAT.
+(require '[clojure.java.shell :as shell])
+
+(def github-helper
+  (make-source
+   {:base-provider :anthropic
+    :keyword :anthropic-github
+    :system-prompt "You have access to the GitHub MCP server. Use its search tools to find real, current information instead of relying on memory."
+    :mcp-servers [{:name "github"
+                   :url "https://api.githubcopilot.com/mcp/"
+                   :authorization-token (clojure.string/trim (:out (shell/sh "gh" "auth" "token")))}]}))
+
+;; :anthropic-github (== github-helper) now works as a provider anywhere
+(query :anthropic-github "Find one real GitHub repo that is a proof-of-concept for the Log4Shell vulnerability, and name it.")
+
+;; inspect what the MCP server actually did
+(:mcp-tool-uses (complete {:provider :anthropic-github
+                           :messages [{:role :user :content "Search GitHub for a repo about the Heartbleed vulnerability and name one."}]}))
+
 ;; organization id is available from a standard key's rate-limit headers;
 ;; name/owner/workspace of the key itself requires an Admin API key
 ;; (ANTHROPIC_ADMIN_API_KEY) — see hyperphor.ellum.providers.anthropic
