@@ -37,7 +37,7 @@ the gaps:
 6. Tools are dispatched sequentially with no isolation (FEATURE_SURVEY #8).
    There are no general request/response hooks either (FEATURE_SURVEY #4).
 7. MCP server tools can't be handed straight to `:tools`. That's the open
-   bridge TODO in `mcp.md`, being done separately as `todo/ellum-mcp-tool-bridge`.
+   bridge TODO in `mcp.md`, planned as the separate `ellum-mcp-tool-bridge` task.
 8. The Anthropic message shape has no way to send `is_error: true` on a
    `tool_result`. `message->anthropic` and `results->anthropic-user-message`
    only emit `:tool_use_id`/`:content`.
@@ -92,7 +92,7 @@ loop only, in `agent.clj`; frameworks out of scope".
 (agent/run sql-fixer "How many trials started in 2024?")
 ;; => {:content  "..."            ; final text (or :output, if structured)
 ;;     :output   {...}            ; parsed structured result, when :output given
-;;     :stop     :done            ; :done | :max-iterations | :rejected | :error
+;;     :stop     :done            ; :done | :max-iterations | :aborted
 ;;     :messages [...]            ; full history incl. tool turns, re-submittable
 ;;     :steps    [{:response .. :tool-calls .. :results ..} ...]
 ;;     :usage    {:input-tokens N :output-tokens N}}
@@ -106,17 +106,21 @@ Some notes on the design:
 
 - `make-agent` just validates and returns the map. Agents are data (no atom,
   no registry) and can be `assoc`ed like any other config.
-- `run` never throws for loop-level outcomes. Max-iterations, rejection and
-  tool errors come back as `:stop` plus a full trace. Provider/HTTP errors
+- `run` never throws for loop-level outcomes. Max-iterations and hook aborts
+  come back as `:stop` plus a full trace. Provider/HTTP errors
   still throw: that's an infrastructure failure, not an agent outcome.
 - **Tool errors** are caught per call and sent back to the model as an error
   result (`is_error` on Anthropic, an `"Error: ..."` string on OpenAI).
-  `:stop :error` only happens if `:on-tool-error` decides to abort.
+  The run continues.
 - **Hooks** are the seam where heavier infrastructure plugs in without
   living here. Approval UIs, tracing/OTel, persistence and budgets are all
-  just hook functions:
+  just hook functions. Any hook can return `:abort`, which ends the run with
+  `:stop :aborted`.
   - `:on-tool-request` returns nil to proceed or `{:reject msg}` to veto.
-  - `:on-step` and `:on-tool-error` are notification hooks.
+    A veto goes back to the model as an error result and the loop continues,
+    as in FEATURE_SURVEY #7.
+  - `:on-step` is called after each model turn and `:on-tool-error` after
+    each failed tool call. Otherwise they only notify.
 - **Structured result.** When `:output` is given, add a synthetic `finish`
   tool whose parameters are the schema. The run ends when the model calls
   it, and its arguments are `:output`. This works the same on both providers
@@ -167,15 +171,16 @@ Roughly in dependency order. Each step can land and be tested on its own.
      (no sibling repo calls it: nlq uses `complete`, eli uses `query`).
      Mark it deprecated in favor of `agent/run`.
    - `chat` appends the whole run's new messages, not just the last one.
-5. **MCP.** Once `todo/ellum-mcp-tool-bridge` lands, `(mcp/->tools server)`
-   output drops straight into `:tools`. Nothing agent-specific is needed.
+5. **MCP.** Once the `ellum-mcp-tool-bridge` task lands, whatever tool-def
+   function it produces feeds straight into `:tools`. Nothing agent-specific
+   is needed.
 6. **New `test/clj/hyperphor/ellum/agent_test.clj`.** No live LLM calls:
    stub with `(with-redefs [core/-complete scripted-responses] ...)`, the
    same way the gaps above were reproduced. Cover:
    - tool turn kept in `:messages`
    - a throwing tool becomes an error result, and the run continues
    - max-iterations returns `:stop :max-iterations` with a trace
-   - veto via `:on-tool-request`
+   - veto via `:on-tool-request` fed back to the model; `:abort` stops the run
    - `finish`-tool structured output
    - `agent->tool` nesting
    - usage summed
@@ -191,8 +196,8 @@ Interactions with in-flight branches:
 
 ## Motivating example (cross-repo, not part of this change)
 
-`nlq`'s `generate :sql` is a single `llm/complete`. When the SQL fails, the
-error is just shown to the user. As an agent with one `run-sql` tool (and
+`nlq`'s `generate :sql` is a single `llm/complete`. When the SQL fails,
+`endpoint`'s `with-ex` returns it as `:error` and nothing tries to repair it. As an agent with one `run-sql` tool (and
 `:on-tool-request` limiting it to read-only `SELECT`), the model would see
 the Postgres error and repair its own query, a few iterations at most. That's
 the lightweight-agent use case in this ecosystem, and a good first consumer
