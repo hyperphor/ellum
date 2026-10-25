@@ -11,6 +11,8 @@ This would be a good resources for a model selector I suppose.
 https://models.dev/
 doesn'r really provide API access though? That is via https://ai-sdk.dev/
 
+Proposal: see design/ellum-model-catalog.md (it does have an HTTP API, metadata only).
+
 # Multiple keys/provider
 
 Eg llm objects like 
