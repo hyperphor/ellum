@@ -41,7 +41,9 @@ This might be too OpenAI specific but that's OK (and probably other providers co
 
 Sort of...I suppose the boundary is clear, but LLMs have a way of breaking my normal modularity instincts.
 
-# Agent support
+# PROPOSAL (pending review) Agent support
+See design/ellum-agent-support.md: agent = data map + agent/run loop returning a full trace (tool errors as results,
+hooks for veto/tracing, finish-tool structured output, agent->tool for composition), in a separable agent.clj.
 
 Of course, but what does that mean? 
 
