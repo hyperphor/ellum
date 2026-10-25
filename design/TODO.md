@@ -5,13 +5,14 @@ This is like a ghetto version of alzabo instance get
 (generate-instances "fruit" 10) → ["apple"",...]
 extend-set (in ELI)
 
-# models.dev
+# PROPOSAL (pending review) models.dev
+See design/ellum-model-catalog.md: models.dev has a usable static JSON API (metadata only, CORS+ETag);
+recommend snapshot+refresh catalog in new models.clj feeding model-info, selector filters, pricing.
+
 
 This would be a good resources for a model selector I suppose.
 https://models.dev/
 doesn'r really provide API access though? That is via https://ai-sdk.dev/
-
-Proposal: see design/ellum-model-catalog.md (it does have an HTTP API, metadata only).
 
 # Multiple keys/provider
 
