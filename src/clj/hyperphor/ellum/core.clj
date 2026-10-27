@@ -65,6 +65,9 @@
     :system-prompt - used as :system when a call doesn't specify its own
     :mcp-servers   - prepended to any :mcp-servers a call also specifies
     :default-model - used as :model when a call doesn't specify its own
+    :vector-store-ids - (:openai) prepended to any a call specifies; enables
+                     RAG via the Responses API file_search tool
+    :max-num-results  - (:openai) file_search result cap, unless the call sets one
 
   Returns the provider keyword. Use it (or, equivalently, the :keyword you
   gave) as :provider anywhere a provider is accepted — core/complete,
@@ -87,15 +90,18 @@
 
 (defn- apply-custom-provider
   "If req's :provider is a registered custom source, rewrite req to use its
-  :base-provider with the registered :system-prompt/:mcp-servers/:default-model
-  folded in (only where req doesn't already specify its own, except
-  :mcp-servers which prepends). Otherwise req unchanged."
+  :base-provider with its registered settings folded in (only where req doesn't
+  specify its own, except :mcp-servers/:vector-store-ids which prepend).
+  Otherwise req unchanged."
   [req]
-  (if-let [{:keys [base-provider system-prompt mcp-servers default-model]}
+  (if-let [{:keys [base-provider system-prompt mcp-servers default-model
+                   vector-store-ids max-num-results]}
            (custom-provider-config (:provider req))]
     (cond-> (assoc req :provider base-provider)
       (and system-prompt (not (:system req))) (assoc :system system-prompt)
       mcp-servers (assoc :mcp-servers (into (vec mcp-servers) (:mcp-servers req)))
+      vector-store-ids (assoc :vector-store-ids (into (vec vector-store-ids) (:vector-store-ids req)))
+      (and max-num-results (not (:max-num-results req))) (assoc :max-num-results max-num-results)
       (and default-model (not (:model req))) (assoc :model default-model))
     req))
 
@@ -113,6 +119,9 @@
     :mcp-servers - seq of {:name :url :authorization-token} (optional, :anthropic
                   only) — calls tools on a remote MCP server via Anthropic's
                   MCP connector (beta); see design/mcp.md
+    :vector-store-ids - seq of OpenAI vector store ids (optional, :openai only) —
+                  RAG via the Responses API file_search tool; also
+                  :max-num-results, :include-search-results, :previous-response-id
     :max-tokens - max tokens in response (default 4096)
 
   Response keys:
@@ -121,6 +130,8 @@
     :mcp-tool-uses - vector of {:id :name :arguments :server} (:anthropic only;
                   nil if no MCP connector tools were called)
     :mcp-tool-results - vector of {:tool-use-id :content :error?} (:anthropic only)
+    :citations  - vector of {:file-id :filename} (:openai with :vector-store-ids);
+                  also :file-search-results and :response-id
     :stop-reason - :stop :tool-calls :length :content-filter
     :usage      - {:input-tokens N :output-tokens N}
     :raw        - original provider response

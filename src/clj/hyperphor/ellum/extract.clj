@@ -42,6 +42,9 @@
           [(read-json-safe (second xtract) :key-fn key-fn) s]
           nil)))))
 
+;;; TODO sometimes there are paren nesting errors, it would be good to
+;;; - detect them (test for extra text after read)
+;;; - correct with some magic smarts TBD
 (defn extract-clojure
   [s]
   (try                                  ;TODO pull out into macro → way

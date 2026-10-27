@@ -71,6 +71,30 @@
 (:mcp-tool-uses (complete {:provider :anthropic-github
                            :messages [{:role :user :content "Search GitHub for a repo about the Heartbleed vulnerability and name one."}]}))
 
+;; make-source with OpenAI RAG: file_search over a hosted vector store
+;; (routes through the Responses API). make-rag-store uploads + indexes files.
+(require '[hyperphor.ellum.providers.openai :as openai])
+
+(def docs-store (openai/make-rag-store "my docs" ["/path/to/a.pdf" "/path/to/b.pdf"]))
+
+(make-source
+ {:base-provider :openai
+  :keyword :openai-docs
+  :vector-store-ids [docs-store]
+  :max-num-results 12
+  :system-prompt "Answer from the provided documents; say so if they don't cover it."})
+
+(query :openai-docs "Summarize what these documents say about melanoma.")
+
+;; which files were cited
+(:citations (complete {:provider :openai-docs
+                       :messages [{:role :user :content "What's new in melanoma?"}]}))
+
+;; background mode for slow RAG queries
+(let [{:keys [id]} (openai/submit-response {:vector-store-ids [docs-store]
+                                            :messages [{:role :user :content "Long question..."}]})]
+  (:content (openai/normalize-responses-response (openai/await-response id))))
+
 ;; organization id is available from a standard key's rate-limit headers;
 ;; name/owner/workspace of the key itself requires an Admin API key
 ;; (ANTHROPIC_ADMIN_API_KEY) — see hyperphor.ellum.providers.anthropic

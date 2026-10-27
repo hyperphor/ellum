@@ -188,6 +188,76 @@
       (is (fn? (:clear! session)))
       (is (= [] ((:history session)))))))
 
+;;; OpenAI Responses API / vector-store RAG
+
+(def ^:private raw-responses-response
+  {:id "resp_1"
+   :status "completed"
+   :output [{:type "file_search_call" :id "fs_1" :status "completed"}
+            {:type "message" :role "assistant"
+             :content [{:type "output_text" :text "Melanoma "
+                        :annotations [{:type "file_citation" :file_id "file-a" :filename "a.pdf" :index 3}]}
+                       {:type "output_text" :text "is a cancer."
+                        :annotations [{:type "file_citation" :file_id "file-a" :filename "a.pdf" :index 9}]}]}]
+   :usage {:input_tokens 100 :output_tokens 7}})
+
+(deftest test-openai-normalize-responses-response
+  (let [n (openai/normalize-responses-response raw-responses-response)]
+    (is (= "Melanoma is a cancer." (:content n)))
+    (is (= [{:file-id "file-a" :filename "a.pdf"}] (:citations n)))
+    (is (= "resp_1" (:response-id n)))
+    (is (= :stop (:stop-reason n)))
+    (is (= {:input-tokens 100 :output-tokens 7} (:usage n))))
+
+  (testing "function calls use call_id as :id"
+    (let [n (openai/normalize-responses-response
+             {:status "completed"
+              :output [{:type "function_call" :id "fc_1" :call_id "call_1"
+                        :name "get_weather" :arguments "{\"location\":\"NYC\"}"}]})]
+      (is (= :tool-calls (:stop-reason n)))
+      (is (= [{:id "call_1" :name "get_weather" :arguments {:location "NYC"}}] (:tool-calls n)))))
+
+  (testing "truncation"
+    (is (= :length (:stop-reason (openai/normalize-responses-response
+                                  {:status "incomplete"
+                                   :incomplete_details {:reason "max_output_tokens"}
+                                   :output []}))))))
+
+(deftest test-openai-responses-request-body
+  (let [body (openai/responses-request-body
+              {:system "be brief"
+               :vector-store-ids ["vs_1"]
+               :max-num-results 5
+               :response-format (schema/openai-json-schema-format "p" {:type "object"})
+               :tools [{:name "f" :description "d" :parameters {:type "object"}}]
+               :messages [{:role :user :content "hi"}
+                          {:role :assistant :tool-calls [{:id "call_1" :name "f" :arguments {:x 1}}]}
+                          {:role :tool :tool-call-id "call_1" :content "ok"}]})]
+    (is (= "be brief" (:instructions body)))
+    (is (= [{:type "file_search" :vector_store_ids ["vs_1"] :max_num_results 5}
+            {:type "function" :name "f" :description "d" :parameters {:type "object"}}]
+           (:tools body)))
+    (is (= {:format {:type "json_schema" :name "p" :schema {:type "object"} :strict true}}
+           (:text body)))
+    (is (= [{:role "user" :content "hi"}
+            {:type "function_call" :call_id "call_1" :name "f" :arguments "{\"x\":1}"}
+            {:type "function_call_output" :call_id "call_1" :output "ok"}]
+           (:input body)))))
+
+(deftest test-openai-rag-source
+  (let [posted (atom nil)
+        src (llm/make-source {:base-provider :openai
+                              :vector-store-ids ["vs_1"]
+                              :max-num-results 3
+                              :system-prompt "use the docs"})]
+    (with-redefs [openai/api-post (fn [path body] (reset! posted [path body]) raw-responses-response)]
+      (is (= "Melanoma is a cancer." (llm/query src "what is melanoma?")))
+      (let [[path body] @posted]
+        (is (= "/responses" path))
+        (is (= "use the docs" (:instructions body)))
+        (is (= [{:type "file_search" :vector_store_ids ["vs_1"] :max_num_results 3}]
+               (:tools body)))))))
+
 (comment
   ;;; Integration tests — require API keys TODO set this up
 
