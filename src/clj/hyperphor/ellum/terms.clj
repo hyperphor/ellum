@@ -7,7 +7,8 @@
             [clojure.java.shell :as shell]
             [clojure.string :as str]))
 
-;;; Originally from ELI, but it seems generally useful
+;;; Originally from ELI, but it seems generally useful.
+;;; Some stuff here verges on Alzabo domain. I guess the dividing line is weheter there is an ontology or not.
 
 ;;; Note: without "of strings" sometimes returns {:concept .. :description...} which is sometime useful
 (defn generate-terms
