@@ -49,6 +49,62 @@
   (throw (ex-info (str "key-status not implemented for provider: " (:provider req))
                   {:req req})))
 
+;;; Custom providers — a named, reusable customization of a base provider
+;;; (extra system prompt, MCP servers, default model, ...), registered once
+;;; and then usable as a plain :provider value everywhere. See design/mcp.md
+;;; "Redesign" for the motivating use case.
+
+(defonce ^:private custom-providers (atom {}))
+
+(defn make-source
+  "Register a customized LLM provider derived from `:base-provider` (eg
+  :anthropic or :openai), with any of these baked in:
+    :keyword       - the provider keyword to register as (default: an
+                     auto-generated keyword, so the returned value alone is
+                     always usable even if you don't name one)
+    :system-prompt - used as :system when a call doesn't specify its own
+    :mcp-servers   - prepended to any :mcp-servers a call also specifies
+    :default-model - used as :model when a call doesn't specify its own
+    :vector-store-ids - (:openai) prepended to any a call specifies; enables
+                     RAG via the Responses API file_search tool
+    :max-num-results  - (:openai) file_search result cap, unless the call sets one
+
+  Returns the provider keyword. Use it (or, equivalently, the :keyword you
+  gave) as :provider anywhere a provider is accepted — core/complete,
+  core/query, chat/make-chat, etc."
+  [{:keys [base-provider] custom-keyword :keyword :as config}]
+  (when-not base-provider
+    (throw (ex-info "make-source requires :base-provider" {:config config})))
+  (let [kw (or custom-keyword (keyword (str (gensym "custom-provider-"))))]
+    (swap! custom-providers assoc kw (dissoc config :keyword))
+    kw))
+
+(defn- custom-provider-config [provider]
+  (get @custom-providers provider))
+
+(defn- resolve-provider
+  "The real provider keyword behind `provider` — itself, unless it's a
+  custom source registered via make-source, in which case its :base-provider."
+  [provider]
+  (get-in @custom-providers [provider :base-provider] provider))
+
+(defn- apply-custom-provider
+  "If req's :provider is a registered custom source, rewrite req to use its
+  :base-provider with its registered settings folded in (only where req doesn't
+  specify its own, except :mcp-servers/:vector-store-ids which prepend).
+  Otherwise req unchanged."
+  [req]
+  (if-let [{:keys [base-provider system-prompt mcp-servers default-model
+                   vector-store-ids max-num-results]}
+           (custom-provider-config (:provider req))]
+    (cond-> (assoc req :provider base-provider)
+      (and system-prompt (not (:system req))) (assoc :system system-prompt)
+      mcp-servers (assoc :mcp-servers (into (vec mcp-servers) (:mcp-servers req)))
+      vector-store-ids (assoc :vector-store-ids (into (vec vector-store-ids) (:vector-store-ids req)))
+      (and max-num-results (not (:max-num-results req))) (assoc :max-num-results max-num-results)
+      (and default-model (not (:model req))) (assoc :model default-model))
+    req))
+
 ;;; Public API
 
 (defn complete
@@ -60,27 +116,41 @@
     :messages   - vector of {:role :user/:assistant, :content \"...\"} (required)
     :system     - system prompt string (optional)
     :tools      - vector of tool defs {:name :description :parameters :fn} (optional)
+    :mcp-servers - seq of {:name :url :authorization-token} (optional, :anthropic
+                  only) — calls tools on a remote MCP server via Anthropic's
+                  MCP connector (beta); see design/mcp.md
+    :vector-store-ids - seq of OpenAI vector store ids (optional, :openai only) —
+                  RAG via the Responses API file_search tool; also
+                  :max-num-results, :include-search-results, :previous-response-id
     :max-tokens - max tokens in response (default 4096)
 
   Response keys:
     :content    - string text of response (nil if only tool calls)
     :tool-calls - vector of {:id :name :arguments} (nil if no tool calls)
+    :mcp-tool-uses - vector of {:id :name :arguments :server} (:anthropic only;
+                  nil if no MCP connector tools were called)
+    :mcp-tool-results - vector of {:tool-use-id :content :error?} (:anthropic only)
+    :citations  - vector of {:file-id :filename} (:openai with :vector-store-ids);
+                  also :file-search-results and :response-id
     :stop-reason - :stop :tool-calls :length :content-filter
     :usage      - {:input-tokens N :output-tokens N}
-    :raw        - original provider response"
+    :raw        - original provider response
+
+  :provider may also be a custom source registered via make-source."
   [req]
-  (-complete req))
+  (-complete (apply-custom-provider req)))
 
 (defn complete-stream
   "Like complete but streams SSE events as a lazy seq."
   [req]
-  (-complete-stream req))
+  (-complete-stream (apply-custom-provider req)))
 
 (defn list-models
-  "List available models for a provider (:openai or :anthropic).
+  "List available models for a provider (:openai or :anthropic, or a custom
+  source registered via make-source).
   Returns a vector of {:id :created :raw} (:name also present for :anthropic)."
   [provider]
-  (-list-models provider))
+  (-list-models (resolve-provider provider)))
 
 (defn key-status
   "Get the current rate-limit standing for a provider's API key.
@@ -93,7 +163,7 @@
   (ANTHROPIC_ADMIN_API_KEY, distinct from a standard API key) — see
   hyperphor.ellum.providers.anthropic/usage-report and /cost-report."
   [req]
-  (-key-status req))
+  (-key-status (apply-custom-provider req)))
 
 (defn- ensure-content
   "Return the :content of a normalized response, or throw an informative error
@@ -110,7 +180,7 @@
 
 (defn query
   "Convenience: single-turn user query, returns text content string.
-  provider can be :openai or :anthropic.
+  provider can be :openai, :anthropic, or a custom source from make-source.
   Throws if the provider returns no content (e.g. a refusal or content filter)."
   [provider text & {:keys [model system max-tokens tools]}]
   (-> (complete (cond-> {:provider provider
@@ -139,7 +209,7 @@
       (throw (ex-info "Agent loop exceeded max iterations"
                       {:iterations iterations})))
     (let [response (complete req)
-          provider (:provider req)
+          provider (resolve-provider (:provider req))
           tool-defs (:tools req)]
       (if (= :tool-calls (:stop-reason response))
         (let [_ (when on-tool-call (on-tool-call (:tool-calls response)))
@@ -201,11 +271,13 @@
 (defn query-structured
   "Run a query with a JSON schema and return the parsed, coerced result.
   For OpenAI, uses native structured output (response_format).
-  For Anthropic, instructs via system prompt and parses JSON from response."
+  For Anthropic, instructs via system prompt and parses JSON from response.
+  provider may also be a custom source registered via make-source, branching
+  per its :base-provider."
   [provider text schema-name json-schema & {:keys [model system max-tokens]}]
-  (case provider
+  (case (resolve-provider provider)
     :openai
-    (-> (complete (cond-> {:provider :openai
+    (-> (complete (cond-> {:provider provider
                            :messages [{:role :user :content text}]
                            :response-format (schema/openai-json-schema-format schema-name json-schema)}
                     model (assoc :model model)
@@ -218,7 +290,7 @@
                                   (pr-str json-schema)
                                   "\nDo not include explanation, only the JSON object.")
           sys (str (or system "") schema-instruction)]
-      (-> (complete (cond-> {:provider :anthropic
+      (-> (complete (cond-> {:provider provider
                              :messages [{:role :user :content text}]
                              :system sys}
                       model (assoc :model model)

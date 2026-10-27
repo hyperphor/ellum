@@ -26,19 +26,19 @@
                       :as :json})))
 
 (defn api-post
-  [path body]
+  [path body & [extra-headers]]
   (:body (client/post (str base-url path)
                       {:body (json/write-str body)
                        :content-type :application/json
-                       :headers (base-headers)
+                       :headers (merge (base-headers) extra-headers)
                        :as :json})))
 
 (defn api-post-stream
-  [path body]
+  [path body & [extra-headers]]
   (:body (client/post (str base-url path)
                       {:body (json/write-str body)
                        :content-type :application/json
-                       :headers (base-headers)
+                       :headers (merge (base-headers) extra-headers)
                        :as :stream})))
 
 (defn list-models []
@@ -177,6 +177,22 @@
   (when (= type "tool_use")
     {:id id :name name :arguments input}))
 
+;;; MCP connector (beta) — tools hosted on a remote MCP server, called and
+;;; executed by Anthropic's infrastructure. Unlike client-side tool-calls,
+;;; there's nothing for ellum to dispatch: the call and result already
+;;; happened by the time the response comes back. These accessors just
+;;; surface that activity for inspection/logging.
+
+(defn- content-block->mcp-tool-use
+  [{:keys [type id name input server_name]}]
+  (when (= type "mcp_tool_use")
+    {:id id :name name :arguments input :server server_name}))
+
+(defn- content-block->mcp-tool-result
+  [{:keys [type tool_use_id content is_error]}]
+  (when (= type "mcp_tool_result")
+    {:tool-use-id tool_use_id :content content :error? (boolean is_error)}))
+
 (defn- normalize-stop-reason [stop-reason]
   (case stop-reason
     "end_turn" :stop
@@ -197,6 +213,12 @@
         tool-calls (->> content-blocks
                         (keep content-block->tool-call)
                         not-empty)
+        mcp-tool-uses (->> content-blocks
+                           (keep content-block->mcp-tool-use)
+                           not-empty)
+        mcp-tool-results (->> content-blocks
+                              (keep content-block->mcp-tool-result)
+                              not-empty)
         stop-reason (normalize-stop-reason (:stop_reason response))]
     {:content text
      :refusal (when (= stop-reason :refusal)
@@ -205,6 +227,8 @@
                     "No explanation given"
                     ))
      :tool-calls tool-calls
+     :mcp-tool-uses mcp-tool-uses
+     :mcp-tool-results mcp-tool-results
      :stop-reason stop-reason
      :usage {:input-tokens (get-in response [:usage :input_tokens])
              :output-tokens (get-in response [:usage :output_tokens])}
@@ -217,6 +241,25 @@
   {:name name
    :description description
    :input_schema parameters})
+
+;;; Anthropic's MCP *connector* (beta): Claude calls tools on a remote MCP
+;;; server directly, with Anthropic's infrastructure making the connection —
+;;; unrelated to ellum's own mcp_client.clj, which is ellum acting as an MCP
+;;; client itself. Requires the anthropic-beta header below, plus a
+;;; {:type "url" ...} entry in :mcp_servers *and* a matching {:type
+;;; "mcp_toolset" :mcp_server_name ...} entry in :tools for each server (see
+;;; design/mcp.md). ellum takes just the server list and generates the
+;;; toolset entries, so callers don't have to keep the two in sync by hand.
+(def mcp-beta-header "mcp-client-2025-11-20")
+
+(defn- mcp-server->anthropic
+  [{:keys [name url authorization-token]}]
+  (cond-> {:type "url" :name name :url url}
+    authorization-token (assoc :authorization_token authorization-token)))
+
+(defn- mcp-server->toolset
+  [{:keys [name]}]
+  {:type "mcp_toolset" :mcp_server_name name})
 
 (defn- message->anthropic
   "Convert an ellum message to Anthropic Messages API format.
@@ -247,28 +290,43 @@
 
 ;;; Main complete function
 
+(defn- mcp-request-body
+  "The :tools/:mcp_servers/beta-header pieces of a request, given ellum-style
+  :tools and :mcp-servers ({:name :url :authorization-token} maps)."
+  [tools mcp-servers]
+  {:tools (not-empty (vec (concat (map mcp-server->toolset mcp-servers)
+                                  (map serialize-tool tools))))
+   :mcp_servers (when mcp-servers (mapv mcp-server->anthropic mcp-servers))
+   :headers (when mcp-servers {"anthropic-beta" mcp-beta-header})})
+
 (defn complete
   "Call Anthropic Messages API.
-  req keys: :model :messages :system :tools :max-tokens :stream"
-  [{:keys [model messages system tools max-tokens]
+  req keys: :model :messages :system :tools :max-tokens :stream
+  :mcp-servers - seq of {:name :url :authorization-token} to call tools on a
+  remote MCP server via Anthropic's MCP connector (beta). See design/mcp.md."
+  [{:keys [model messages system tools mcp-servers max-tokens]
     :or {model default-model max-tokens 4096}}]
-  (let [body (cond-> {:model model
+  (let [{:keys [tools mcp_servers headers]} (mcp-request-body tools mcp-servers)
+        body (cond-> {:model model
                       :max_tokens max-tokens
                       :messages (mapv message->anthropic messages)}
                system (assoc :system system)
-               tools (assoc :tools (mapv serialize-tool tools)))]
-    (-> (api-post "/messages" body)
+               tools (assoc :tools tools)
+               mcp_servers (assoc :mcp_servers mcp_servers))]
+    (-> (api-post "/messages" body headers)
         normalize-response)))
 
 (defn complete-stream
   "Call Anthropic Messages API with streaming.
-  Returns lazy seq of parsed SSE events."
-  [{:keys [model messages system tools max-tokens]
+  Returns lazy seq of parsed SSE events. See `complete` for :mcp-servers."
+  [{:keys [model messages system tools mcp-servers max-tokens]
     :or {model default-model max-tokens 4096}}]
-  (let [body (cond-> {:model model
+  (let [{:keys [tools mcp_servers headers]} (mcp-request-body tools mcp-servers)
+        body (cond-> {:model model
                       :max_tokens max-tokens
                       :messages (mapv message->anthropic messages)
                       :stream true}
                system (assoc :system system)
-               tools (assoc :tools (mapv serialize-tool tools)))]
-    (util/parse-sse-stream (api-post-stream "/messages" body))))
+               tools (assoc :tools tools)
+               mcp_servers (assoc :mcp_servers mcp_servers))]
+    (util/parse-sse-stream (api-post-stream "/messages" body headers))))

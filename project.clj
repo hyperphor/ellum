@@ -1,4 +1,4 @@
-(defproject com.hyperphor/ellum "0.1.4"
+(defproject com.hyperphor/ellum "0.1.6"
   :description "Unified multi-provider LLM client library"
   :url "https://github.com/hyperphor/ellum"
   :license {:name "MIT"}
@@ -11,6 +11,7 @@
                  [org.clojure/data.json "2.5.2"]
                  [environ "1.2.0"]
                  [com.hyperphor/multitool "0.3.3"]
+                 [hiccup "2.0.0"]        ; needed by hyperphor.multitool.graph
                  [org.clojure/core.async "1.6.681"]]
   :source-paths ["src/clj"]
   :test-paths ["test/clj"]

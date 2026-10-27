@@ -1,3 +1,9 @@
+# TODO cost and other interesting reply tidbits
+
+LLM replies have a lot of interesting stuff in them, cost especially. Should be an easy way to get that out of a call
+
+
+
 # TODO
 
 This is like a ghetto version of alzabo instance get

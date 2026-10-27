@@ -11,9 +11,9 @@
 ;;; Waitaminute most of this is in utils already. Foo
 
 (defn read-json-safe
-  [s]
+  [s & {:keys [key-fn] :or {key-fn keyword}}]
   (try
-    (json/read-str s :key-fn keyword)
+    (json/read-str s :key-fn key-fn)
     (catch Throwable e
       s)))
 
@@ -28,20 +28,23 @@
     (when m?
       [(keyword type) code (str/replace s m? "")])))
 
-;;; TODO sometimes it returens separate ```json elements! Argh
+;;; TODO sometimes it returens multiple separate ```json elements! Argh
 ;;; TODO most things that use this would be better off with schema-based approach
 (defn extract-json
-  [s]
+  [s & {:keys [key-fn] :or {key-fn keyword}}]
   (let [[type code text] (extract-code s)]
     (if (= type :json)
-      [(read-json-safe code) text]
+      [(read-json-safe code :key-fn key-fn) text]
       ;; Or, maybe encoded differently
       (let [xtract (or (re-find #"JSON[\s\S]*?(\[[\s\S]*\])" s)
                        (re-find  #"(?s)[\s\S]*?(\[\s*\{[\s\S]*\}\s*\])" s))] ;finds [{ ... }]
         (if xtract
-          [(read-json-safe (second xtract)) s]
+          [(read-json-safe (second xtract) :key-fn key-fn) s]
           nil)))))
 
+;;; TODO sometimes there are paren nesting errors, it would be good to
+;;; - detect them (test for extra text after read)
+;;; - correct with some magic smarts TBD
 (defn extract-clojure
   [s]
   (try                                  ;TODO pull out into macro → way

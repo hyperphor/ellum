@@ -10,14 +10,17 @@
     :model     - model string override
     :system    - system prompt string
     :tools     - vector of tool definitions
-    :max-tokens - max tokens per completion"
-  [& [{:keys [provider model system tools max-tokens]
+    :max-tokens - max tokens per completion
+    :vector-store-ids, :max-num-results - OpenAI RAG (see openai/complete-responses)"
+  [& [{:keys [provider model system tools max-tokens vector-store-ids max-num-results]
        :or {provider :openai}}]]
   (atom {:provider provider
          :model model
          :system system
          :tools tools
          :max-tokens max-tokens
+         :vector-store-ids vector-store-ids
+         :max-num-results max-num-results
          :messages []}))
 
 (defn add-message!
@@ -40,7 +43,9 @@
 (defn chat-config
   "Return the non-history config for use in a complete call."
   [chat]
-  (select-keys @chat [:provider :model :system :tools :max-tokens]))
+  (into {} (remove (comp nil? val))
+        (select-keys @chat [:provider :model :system :tools :max-tokens
+                            :vector-store-ids :max-num-results])))
 
 ;;; Agentic tool loop helpers
 
